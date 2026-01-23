@@ -1,0 +1,199 @@
+---
+#main_topsize: 0.05
+#main_bottomsize: 0.05
+primary_colour: '#2c45b7'
+secondary_colour: '#ff7400'
+
+title: |
+        **What makes a basketball team win?** 
+author: 
+  - name: João Patrício | 20231645
+  - name: Rodrigo Silva | 20231602
+affiliation: NOVA Information Management School
+
+author_textsize: '40pt'
+title_textsize: '80pt'
+width: '90cm'
+height: '150cm'
+
+# title box customization
+title_textcol: '#000000'
+author_textcol: '#000000'
+font_family: 'arial'
+titletext_fontfamily: 'arial'
+
+logoleft_name: https&#58;//cityme.novaims.unl.pt/images/footer/novaims.png
+
+# poster body customization
+body_bgcol: '#6b84f1'
+body_textsize: '42px'
+column_numbers: 4
+column_margins: '0.5cm'
+columnline_col: '#FFFFFF'
+columnline_width: '3mm'
+columnline_style: 'line'
+
+output: 
+  posterdown::posterdown_html:
+    self_contained: false
+    pandoc_args: --mathjax
+    number_sections: false
+link-citations: true
+knit: pagedown::chrome_print
+
+
+---
+```{r include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,             
+  warning = FALSE,          
+  message = FALSE,          
+  error = FALSE,            
+  fig.align = 'center',     
+  out.width = "100%",       
+  fig.asp = 0.618,          
+  fig.retina = 2,           
+  dpi = 300)
+options(knitr.table.format = "html") 
+
+
+```
+# Introduction
+Basketball is a complex game. From the glamour of the NBA to the depths of the Regional Divisions of Ulaanbaatar, each team has its own unique style of play, with its strengths and weaknesses. "Offense wins games, defense wins championships" is a popular saying, but there is not a common winning formula for every basketball league champion. Even though, there are some aspects of the game that impact winning more than others. That is what we are trying to discover, what are the areas that a team must perfect to maximize their chances of winning. Which variables impact Win Ratio the most?
+
+
+```{r include=FALSE}
+library(tidyverse)
+library(lmtest)
+library(car)
+library(tidyr)
+library(ggplot2)
+library(ggcorrplot)
+```
+
+# Dataset
+We chose a dataset containing the total team statistics from the 2023–24 NCAA Division I Men's basketball season, regarding 362 teams. This allows us to have a higher number of teams than any other league in the world.
+```{r include=FALSE}
+ball <-read.csv("NCAA D1 Bball Data 23-24.csv")
+#Creating and removing columns
+ball <- ball %>%
+  mutate(DRB=TRB-ORB, X2P= FG- X3P, X2PA= FGA- X3PA, X2PF=X2PA- X2P, X3PF=X3PA- X3P, FTF= FTA-FT)%>%
+  subset(select=-c(Rk, X, X.1, X.2, X.3, X.4, W, L ,SRS, ConfW, ConfL, HomeW, HomeL, AwayW, AwayL, PointsTm, PointsOpp, MP, FG_pct, X3P_pct, FT_pct,TRB, FG, FGA, X2PA, X3PA, FTA))%>%
+  rename(Win_ratio=W.L_pct)
+#Finding NA
+which(is.na(ball), arr.ind=TRUE)
+#Removing NA and ordering columns 
+ball <- ball[1:362, c(1,3,2,4,14,15,5,16,6, 17,13, 7,8,9,10,11,12)]
+```
+We removed empty columns, as well as columns regarding wins and losses, as we are trying to predict the winning percentage. We also removed columns that derive from others (shooting percentages), and TRB (total rebounds) and FG (field goals made), instead creating DRB (defensive rebounds) and 2P (2-point shots made). in addition, we also removed the attempted shots, using instead failed shots. We now have 17 columns.
+We also checked if any independet variable should suffer a transformation, by plotting them against the dependent variable, which was not necessary.
+```{r}
+columns<-c("School","Win_Ratio","Games","SOS","X2P","X2PF","X3P","X3PF","FT","FTF","ORB","DRB","AST","STL","BLK","TOV","PF")
+
+descriptions<-c("School Name","Number of games", "Win-Loss Ratio(%)","Strength of Schedule, metric that calculates how strong the average opponent faced is","Number of 2-point shots made","Number of 2-point shots failed","Number of 3-point shots made","Number of 3-point shots failed","Number of free-throw shots made","Number of free-throw shots failed","Number of defensive rebounds","Number of defensive rebounds","Number of assists","Number of steals","Number of blocks","Number of turnovers","Number of fouls")
+
+cols_description <- data.frame(Column = columns, Description = descriptions, stringsAsFactors = FALSE)
+```
+
+```{r echo=FALSE}
+library(knitr)
+kable(cols_description)
+```
+<br>
+
+# Methodology
+For each model that we proposed, we evaluated the 6 MLR assumptions, carried out any necessary modifications and finally checked if our model was well specified by performing Ramsey's RESET Test. One of our proposed models (3) was backed by literature, while another (1) considered all variables and the other (2) only the ones statistically significant at the 5% level.
+
+```{r}
+attach(ball)
+#Model 2
+reg2<- lm(Win_ratio~Games+ SOS+ X2P+ X2PF + X3PF+ FT+ FTF+ ORB+ DRB+ AST+ STL+ TOV)
+```
+
+# MLR Assumptions
+* Linear in parameters
+  
+```{r}
+plot(reg2, which = 1)
+```
+<br>
+Does not seem to be any non linear relation between the dependent and independent variables, as the red line is relatively flat, so asssumption 1 holds. We only have problems when the fitted values approach 1, which is fair, as we don't want a win ratio above 1, that is impossible.
+This might be one weakness in our model, that it may predict win ratios above 1, which is wrong.
+  
+* Random Sampling
+  
+We have a random sample of 362 observations from one basketball season, assuring random sampling.
+  
+* No Perfect Collinearity
+```{r}
+vars<- c("Games","SOS","X2P","X2PF","X3P","X3PF","FT","FTF","ORB","DRB","AST","STL","BLK","TOV","PF")
+correl<- cor(ball[,vars], , use = "complete.obs")
+ggcorrplot(correl, 
+           method = "square",          
+           type = "lower",           
+           lab = TRUE ,
+           lab_size = 2)
+```
+<br>
+There are no perfectly correlated variables, assuring assumption 3. However, we must be careful with X3P and X3PF, as they have a correlation of 0.85.
+  
+* Zero Conditional Mean
+```{r include=FALSE}
+res2<-resid(reg2)
+#Mean of residuals
+mean(res2)
+```
+The mean of the residuals is very close to zero, giving us confidence that the zero conditional mean assumption holds.
+  
+* Homoscedasticity
+  
+Breusch-Pagan and Special White Tests both don't reject the null hypothesis, giving us no evidence of heteroskedasticity. Therefore, we don't need to use the robust estimators.
+  
+* Normality
+  
+```{r}
+hist(res2)
+```
+<br>
+The histogram of the residuals resembles a normal distribution.
+
+# RESET Test
+The RESET Test assesses general functional form misspecification. As we don't reject the null hypothesis, there is no evidence of model misspecification.
+
+#  Final Model
+
+
+<div style="text-align: center; font-weight: bold; font-size: 40px;">
+  Win Ratio = 0.02235&ast;Games - 0.002383&ast;SOS - 0.0002402&ast;X2P - 0.001380&ast;X2PF - 0.001305&ast;X3PF + 0.0003078&ast;FT - 0.0005288&ast;FTF + 0.001161&ast;ORB + 0.001213&ast;DRB + 0.0002842&ast;AST + 0.001458&ast;STL - 0.001481&ast;TOV
+</div>
+
+Our final model ended up having the variables statistically significant at the 5% level. It had a similar R-Squared and Adjusted R-Squared to the model with all variables, but unlike the latter, it had no highly-correlated variables. Furthermore, it had much higher R-Squared and Adjusted R-Squared than the model that used the variables supported by the literature.
+The variables of the model which have the highest estimated coefficients, and therefore, the most positive impact on Win Ratio are the number of games, the defensive and offensive rebounds. Negatively, it is the strength of schedule, the turnovers and missed 2 and 3 point shots. 
+We decided to use this model to predict the Win Ratios of the 2024-2025 season, which finished a couple months ago, and compare it to the real values.
+```{r}
+ball2<-read.csv("NCAA D1 Bball Data 24-25.csv")
+#Creating and removing columns
+ball2 <- ball2 %>%
+  mutate(DRB=TRB-ORB, X2P= FG- X3P, X2PA= FGA- X3PA, X2PF=X2PA- X2P, X3PF=X3PA- X3P, FTF= FTA-FT)%>%
+  subset(select=-c(Rk, X, X.1, X.2, X.3, X.4, W, L ,SRS, ConfW, ConfL, HomeW, HomeL, AwayW, AwayL, PointsTm, PointsOpp, MP, FG_pct, X3P_pct, FT_pct,TRB, FG, FGA, X2PA, X3PA, FTA))%>%
+  rename(Win_ratio=W.L_pct)
+pred<-as.numeric(predict(reg2, ball2))
+df<- ball2%>%
+  subset(select=c(School, Win_ratio))%>%
+  mutate(pred_win_ratio=pred, diff=pred_win_ratio-Win_ratio)
+#Plotting our prediction against the actual values
+plot(df$Win_ratio, df$pred_win_ratio, xlab = "Win Ratio", ylab="Predicted Win Ratio")
+abline(0,1)
+```
+<br>
+As we can see, our model does a good job, as our predicted Win Ratio approaches the actual one.
+Even though we have a satisfactory model, the conclusions taken from the impact of the coefficients meet the ones already established in basketball literature. The teams that rebound better, commit less turnovers, miss less shots and play against worst teams have a higher Win Ratio. Nevertheless, the positive impact of the number of games in our model could spark some discussions regarding the current practices on balance between training and games, as an extra game would result in an increase of 0.02 Win ratio, approximately.
+
+# References
+Datasets
+
+* 2023-24 Men’s College Basketball School Stats | College basketball at Sports-Reference.com. (n.d.). College Basketball at Sports-Reference.com. https://www.sports-reference.com/cbb/seasons/men/2024-school-stats.html
+* 2024-25 Men’s College basketball School Stats | College basketball at Sports-Reference.com. (n.d.). College Basketball at Sports-Reference.com. https://www.sports-reference.com/cbb/seasons/men/2025-school-stats.html
+Articles
+
+* Cabarkapa, D., Deane, M. A., Fry, A. C., Jones, G. T., Cabarkapa, D. V., Philipp, N. M., & Yu, D. (2022). Game statistics that discriminate winning and losing at the NBA level of basketball competition. PLoS ONE, 17(8), e0273427. https://doi.org/10.1371/journal.pone.0273427
