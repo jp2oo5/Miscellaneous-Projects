@@ -1,0 +1,312 @@
+---
+title: "Forecasting project"
+author: "Rodrigo Silva (20231602) and João Patrício (20231645)"
+date: "07/06/2025"
+output: html_document
+---
+```{r include=FALSE}
+knitr::opts_chunk$set(echo=FALSE)
+knitr::opts_chunk$set(message=FALSE)
+knitr::opts_chunk$set(warning=FALSE)
+```
+
+  The aim of this project is to forecast a time series, using Box-Jenkins methodology.
+
+```{r libraries}
+library(tidyverse)
+library(fpp3)
+library(urca)
+library(tsibble)
+library(ggplot2)
+library(kableExtra)
+```
+
+
+## Importing and Preprocessing
+
+Dataset: "Quarterly Financial Report: U.S. Corporations: Pharmaceuticals and Medicines: Net Sales, Receipts, and Operating Revenues".
+  This dataset contains data about the financial reports of US Corporations in the Pharmaceutical Industry. Future studies might find it interesting to relate this data to the affordability of medicine in the US.
+
+```{r dataset}
+dataset <- read.csv("data_group_LB.csv")
+colnames(dataset)<-c("Date", "Sales")
+dataset$Date<-as.Date(dataset$Date)
+dataset <- dataset %>%
+  mutate(Quarter = yearquarter(Date))
+data_ts <- tsibble(
+  Quarter = dataset$Quarter,
+  Sales = dataset$Sales,
+  index = Quarter
+)
+save(data_ts, file = "data_group_LB.RData")
+autoplot(data_ts)
+```
+
+  By analyzing the plot, we observe that the time series has a positive trend and possibly even some seasonality.
+The variance keeps somewhat constant, does not increase nor decrease as the values in Sales increase, so probably we do not need to do any transformations.
+  There is a significant spike after 2020 Q2, probably due to Covid19, specially evidenced by the fact that the dataset is related to the pharmaceutical sector.
+  We will consider the training dataset as the time between 2000 and 2022.
+
+```{r training_dataset}
+data_train <- data_ts %>%
+  filter(Quarter <= yearquarter("2022 Q4"))
+autoplot(data_train)
+```
+
+
+# Stationarity
+
+```{r stationarity}
+gg_tsdisplay(data_train, plot_type = 'partial')
+summary(ur.df(data_train$Sales, type="trend", lags=12))
+```
+
+  This time series process is clearly not stationary. Firstly, the plot itself shows a trend. Furthermore, the ACF clearly has memory, due to the way that it decays. Finally, the Augmented Dickey-Fuller test does not reject the null hypotesis.
+  Could possibly be a Trend Stationary Process(TSP). We will try to remove the trend (apply the first differences).
+
+```{r first_ differences}
+data_train_diff <- data_train%>%
+  mutate(first_diff=difference(Sales))
+
+data_train_diff %>%
+  autoplot(first_diff)
+
+data_train_diff%>%
+  gg_tsdisplay(first_diff, plot_type = 'partial')
+
+```
+  
+  The plot looks more stationary, but the ACF doesn't seem right. Let's use the GTS t-sig approach, starting at lag 12 (last 3 years), and going down.
+
+```{r GTS}
+summary(ur.df(na.omit(data_train_diff$first_diff),
+              type='drift', lags=12))
+
+summary(ur.df(na.omit(data_train_diff$first_diff),
+              type='drift', lags=11))
+```
+
+  Looks like lag 11 is significant at the 10% level.
+
+- test-statistic: -1.6341 
+- critical value for 5pct: -2.89 
+
+  So we don't reject H0, which means that there is no stationarity. What if we applied seasonal differences?
+
+```{r seasonal_differences}
+data_train_diff_season<-data_train_diff %>% 
+              mutate(first_diff_and_seasonal = difference(first_diff,4))
+
+data_train_diff_season%>%
+  autoplot(first_diff_and_seasonal)
+
+data_train_diff_season%>%
+  gg_tsdisplay(first_diff_and_seasonal, plot_type="partial")
+
+```
+
+  We will perform the GTS t-sig approach for the ADF test once again, starting at lag 12.
+
+```{r GTS2}
+summary(ur.df(na.omit(data_train_diff_season$first_diff_and_seasonal),
+              type='drift', lags=12))
+
+summary(ur.df(na.omit(data_train_diff_season$first_diff_and_seasonal),
+              type='drift', lags=7))
+
+```
+
+  Lag 7 is significant at the 10% level.
+
+- test-statistic: -5.7541 
+- critical value for 5pct: -2.89 
+
+  We reject H0, meaning that WE HAVE STATIONARITY
+
+  Could we have obtained stationarity just by the seasonal differences? Hyndman says "However, if the data have a strong seasonal pattern, we recommend that seasonal differencing be done first, because the resulting series will sometimes be stationary and there will be no need for a further first difference".
+  There was no suggestion of seasonal pattern, but that might just be our flawed observation capabilities, so let's perform an ADF test to be sure.
+
+```{r only_seasonal_differences}
+data_train_season <- data_train%>%
+  mutate(season_diff=difference(Sales,4))
+
+data_train_season %>%
+  autoplot(season_diff)
+
+data_train_season%>%
+  gg_tsdisplay(season_diff, plot_type = 'partial')
+
+```
+
+```{r GTS3}
+summary(ur.df(na.omit(data_train_season$season_diff),
+              type='drift', lags=12))
+
+summary(ur.df(na.omit(data_train_season$season_diff),
+              type='drift', lags=8))
+```
+
+No stationarity, so let's just keep our first and seasonal differenced model!!
+
+
+# Model Identification
+
+```{r ID}
+data_train_diff_season %>%
+  gg_tsdisplay(first_diff_and_seasonal, plot_type = 'partial')
+```
+
+  Notes
+- d=1, we performed one first differences
+- p=0, q=0, as lag 1 is not significant for the ACF and the PACF
+- D=1, as we performed one seasonal difference 
+- P=1, P=2 or P=3, as there is a clear spike on the first one, but the second and thirds over around the significance threshold, when analyzing the lags of order 4 in the PACF, so let's include the 2 options to be save
+- Q=1, as from lags of order 4 in the ACF, only the first one is significant
+- S=4, as we are working with quarterly data
+
+  Possible Candidates
+-SARIMA(0,1,0)(1,1,1)4
+-SARIMA(0,1,0)(2,1,1)4
+-SARIMA(0,1,0)(3,1,1)4
+
+Just from the initial observation and intuition, we would be more inclined to choose SARIMA(0,1,0)(2,1,1)4.
+
+
+# Model Estimation
+
+```{r Estimation}
+data_train %>% 
+  model(
+    arima010111 = ARIMA(Sales ~ pdq(0,1,0) + PDQ(1,1,1)),
+    arima010211 = ARIMA(Sales ~ pdq(0,1,0) + PDQ(2,1,1)),
+    arima010311 = ARIMA(Sales ~ pdq(0,1,0) + PDQ(3,1,1)),
+    auto = ARIMA(Sales)
+  ) %>%
+  glance() %>% 
+  select(-c(ar_roots, ma_roots)) %>% 
+  kable()
+```
+  As we are dealing with a relatively small sample, AIC is probably the most adequate criterion. Nevertheless, the indicators all draw us to the same conclusion, with arima010111 barely overperforming arima010211 and arima010311.
+
+
+# Model Diagnostics
+
+## Residuals
+```{r Diagnostics}
+fit <- data_train %>% 
+  model(
+    arima010111 = ARIMA(Sales ~ pdq(0,1,0) + PDQ(1,1,1)),
+    arima010211 = ARIMA(Sales ~ pdq(0,1,0) + PDQ(2,1,1)),
+    arima010311 = ARIMA(Sales ~ pdq(0,1,0) + PDQ(3,1,1)),
+    auto = ARIMA(Sales)
+  )
+```
+
+Let's check for all our models.
+
+```{r Residuals}
+fit %>%
+  select(arima010111) %>%
+  gg_tsresiduals()
+
+fit %>%
+  select(arima010211) %>%
+  gg_tsresiduals()
+
+fit %>%
+  select(arima010311) %>%
+  gg_tsresiduals()
+
+fit %>%
+  select(auto) %>%
+  gg_tsresiduals()
+```
+
+  It seems that the residuals are white noise for all our models, including the automated one. We will confirm it by performing the Ljung-Box test. 
+  According to Hyndman, "We suggest using  ℓ=10 for non-seasonal data and ℓ=2m for seasonal data, where m is the period of seasonality". Therefore, we will use lag 8 (2*4). This number is also very close to the rule of thumb learned in class, √T (√89≃9).
+ "Not long ago, I had naively assumed that the correct degrees of freedom would be ℓ−K where K is the number of parameters estimated. I am in good company because Andrew Harvey in Harvey (1990, p259) made exactly the same conjecture". "Perhaps always setting K=p+q would be a sensible strategy for ARIMA models, even if they contain seasonal components. This needs some theoretical analysis."
+  Therefore, we will be using 8 degrees of freedom (ℓ-p-q).
+
+```{r Ljung-Box}
+res1 = augment(fit) %>% 
+        filter(.model == 'arima010111') %>% 
+        features(.innov, ljung_box, lag = 8, dof=8)
+
+res2 = augment(fit) %>% 
+        filter(.model == 'arima010211') %>% 
+        features(.innov, ljung_box, lag = 8, dof=8)
+
+res3= augment(fit) %>% 
+      filter(.model == 'arima010311') %>% 
+      features(.innov, ljung_box, lag = 8, dof=8)
+
+bind_rows(res1, res2, res3) %>% 
+  kable()
+```
+
+With this approach, the p-values are always 0.
+What if we used (ℓ-p-q-P-Q) degrees of freedom?
+
+```{r Ljung-Box2}
+res1 = augment(fit) %>% 
+        filter(.model == 'arima010111') %>% 
+        features(.innov, ljung_box, lag = 8, dof=6)
+
+res2 = augment(fit) %>% 
+        filter(.model == 'arima010211') %>% 
+        features(.innov, ljung_box, lag = 8, dof=5)
+
+res3= augment(fit) %>% 
+      filter(.model == 'arima010311') %>% 
+      features(.innov, ljung_box, lag = 8, dof=4)
+
+bind_rows(res1, res2, res3) %>% 
+  kable()
+```
+
+  With this approach to the degrees of freedom, we can say that both the residuals from arima010211 and arima010311 are not autocorrelated at the 5% significance level, but we can't say the same for arima010111, which is probably more a reflection of the degrees of freedom used in each test, rather than an actual conclusion. 
+Even so, we will proceed with arima010211 and arima010311 as our candidate models.
+
+# Accuracy Measures
+
+```{r Accuracy}
+fit %>%
+  select(arima010211, arima010311,auto)%>%
+  forecast(h = 7) %>% 
+  accuracy(data_ts) %>% 
+  kable()
+```
+
+According to the information criteria, arima010311 is our best model, as it overperforms the others in nearly every metric (only loses to arima010211 in MPE)
+
+Let's plot it!
+
+```{r forecastplot}
+
+fit %>%
+  forecast(h = 8) %>% 
+  filter(.model == 'arima010311') %>% 
+  autoplot(data_ts) 
+
+```
+
+
+# Forecast
+
+  The forecast looks very close to the real plot, even capturing the drop that occurred arround 2023, and the subsequent recovery in Sales. It is also very rewarding seeing that all of the real values are contained in the 80% certainty level.
+
+
+# Reflection
+
+  This project forced us to review the concepts learned throughout the year, as well as to research minor particularities that weren't specifically stated in class, but that were present in our project, forcing us to explore the available material. The experience obtained during the realization of the project will be very valuable in the future. However, we are aware that some of the practices that we used aren't standard, namely the determination of the degrees of freedom in the Ljung-Box Test. Nevertheless, it was interesting to do our research and take our conclusions, even if it meant deviating a little from the proposed actions.
+
+
+# References
+
+- Quarterly Financial Report: U.S. corporations: pharmaceuticals and medicines: net sales, receipts, and operating revenues. (2025, March 24). https://fred.stlouisfed.org/series/QFR101385USNO
+- 9.1 Stationarity and differencing | Forecasting: Principles and Practice (3rd ed). (n.d.). https://otexts.com/fpp3/stationarity.html
+- Chapter 3 The forecaster’s toolbox | Forecasting: Principles and Practice (2nd ed). (n.d.). https://otexts.com/fpp2/toolbox.html
+- Degrees of freedom for a Ljung-Box test – Rob J Hyndman. (n.d.). Rob J Hyndman. https://robjhyndman.com/hyndsight/ljung_box_df.html
+- Damásio, B., & Vasconcelos, C. (2025). Introduction to Time Series. ARMA models. Moodle@NOVAIMS. https://elearning.novaims.unl.pt/
+- Damásio, B., & Vasconcelos, C. (2025). Box-Jenkins methodology. Forecasting with ARIMA models. Introduction to Seasonal ARIMA models. Moodle@NOVAIMS. 
+https://elearning.novaims.unl.pt/
